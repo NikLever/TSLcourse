@@ -52,7 +52,7 @@
     
     <script type="module">
       import * as THREE from 'three';
-      import { attributeArray, uint, float, vec2, vec3, vec4, instanceIndex, Loop, Fn, mx_noise_float, uniform, abs, mix } from 'three/tsl';
+      import { uvec2, float, vec3, vec4, instanceIndex, Fn, abs, mix, texture, textureStore } from 'three/tsl';
       import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
       import { perlinFbm, worleyFbm, remap } from '../../common/TSL-Common.js';
       import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
@@ -85,76 +85,31 @@
       }
 
       async function createNoiseTexture( size = 512 ){
-        
-        let data = new Float32Array( size * size * 4 );
 
-        const dataStorage = attributeArray( data, "vec4").label(
-          "dataStorage"
-        );
-        // The Pixel Buffer Object (PBO) is required to get the GPU computed data in the WebGL2 fallback.
-        dataStorage.setPBO(true);
+        const storageTexture = new THREE.StorageTexture( size, size );
 
-        const usize = uniform( uint( size ) );
-        
-        const computeNoise = Fn( () => {
-          const pt = vec3().toVar();
-          pt.y = float(instanceIndex).div( usize );
-          const scale = vec3( 1 ).toVar();
-          const index = uint( instanceIndex.mul( usize ) ).toVar();               
-          const col = vec4(  ).toVar();
-          const freq = float (4.).toVar();
-          
-          Loop( { start: uint(0), end: usize, type: "uint", condition: "<"}, ( { i } ) => {
-            pt.x = float(i).div( usize );
-            const pt1 = pt.mul(scale).toVar();
-            const pfbm = mix(1., perlinFbm(pt1, 4., 7), .5).toVar();
-            pfbm.assign( abs(pfbm.mul(2.).sub(1.) ) ); // billowy perlin noise
-        
-            col.g.assign(worleyFbm(pt1, freq));
-            col.b.assign(worleyFbm(pt1, freq.mul(2.)));
-            col.a.assign(worleyFbm(pt1, freq.mul(4.)));
-            col.r.assign(remap(pfbm, 0., 1., col.g, 1.)); // perlin-worley
+        const computeTexture = Fn( ( { storageTexture }) => {
+          const posX = instanceIndex.modInt( size );
+          const posY = instanceIndex.div( size );
+          const indexUV = uvec2( posX, posY );
 
-            dataStorage.element( index ).assign( col );
+          const pt = vec3( posX, posY, 0).div( size );
+          const freq = float( 4. );
 
-            index.addAssign( 1 );
-          });
-          
-        })().compute( size );
-        
-        await renderer.computeAsync( computeNoise );
-        
-        data = new Float32Array( await renderer.getArrayBufferAsync( dataStorage.value ) );
+          const pfbm = mix(1., perlinFbm( pt, 4., 7), .5).toVar();
+          pfbm.assign( abs(pfbm.mul(2.).sub(1.) ) ); // billowy perlin noise
+      
+          const g = worleyFbm(pt, freq);
+          const b = worleyFbm(pt, freq.mul(2.));
+          const a = worleyFbm(pt, freq.mul(4.));
+          const r = remap(pfbm, 0., 1., g, 1.); // perlin-worley
 
-        const canvas = document.createElement('canvas');
-
-        canvas.width = size;
-        canvas.height = size;
+          textureStore( storageTexture, indexUV, vec4( r, g, b, a ) ).toWriteOnly();
+        })( { storageTexture } ).compute( size * size );
         
-        const ctx = canvas.getContext( '2d' );
+        await renderer.computeAsync( computeTexture );
         
-        let i = 0;
-        
-        for( let y=0; y<size; y++){
-          for( let x=0; x<size; x++){
-            const r = ~~(data[i++] * 256);
-            const g = ~~(data[i++] * 256);
-            const b = ~~(data[i++] * 256);
-            const a = data[i++];
-            ctx.fillStyle = `rgba(${r}, ${r}, ${r}, ${a})`;
-            ctx.fillRect( x, y, 1, 1 );
-          }
-        }
-        
-        const texture = new THREE.CanvasTexture( canvas );
-        
-        texture.format = THREE.RGBAFormat;
-        texture.minFilter = THREE.LinearFilter;
-        texture.magFilter = THREE.LinearFilter;
-        texture.unpackAlignment = 1;
-        texture.needsUpdate = true;
-        
-        return texture;
+        return storageTexture;
       }
 
       async function tsl(){
@@ -163,7 +118,8 @@
         const material = new THREE.MeshBasicNodeMaterial( { transparent: true } );
         mesh = new THREE.Mesh( geometry, material );
 
-        material.map = await createNoiseTexture();
+        const storageTexture = await createNoiseTexture();
+        material.colorNode = texture( storageTexture );
 
         scene.add( mesh );
 
