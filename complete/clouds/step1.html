@@ -52,7 +52,7 @@
     
     <script type="module">
       import * as THREE from 'three';
-      import { attributeArray, uint, float, vec2, vec3, vec4, instanceIndex, Loop, Fn, mx_noise_float, uniform } from 'three/tsl';
+      import { vec3, vec4, instanceIndex, Fn, texture, textureStore, uvec2 } from 'three/tsl';
       import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
       import { gradientNoise } from '../../common/TSL-Common.js';
       import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
@@ -86,63 +86,27 @@
 
       async function createNoiseTexture( size = 512 ){
         
-        let data = new Float32Array( size * size );
+        const storageTexture = new THREE.StorageTexture( size, size );
+				
+				// create function
 
-        const dataStorage = attributeArray( data, "float").label(
-          "dataStorage"
-        );
-        // The Pixel Buffer Object (PBO) is required to get the GPU computed data in the WebGL2 fallback.
-        dataStorage.setPBO(true);
+				const computeTexture = Fn( ( { storageTexture } ) => {
+          const posX = instanceIndex.modInt( size );
+					const posY = instanceIndex.div( size );
+					const indexUV = uvec2( posX, posY );
+					
+          const scale = vec3( 10 );
+          const pt = vec3( posX, posY, 0).div( size ).mul( scale );
 
-        const usize = uniform( uint( size ) );
-        
-        const computeNoise = Fn( () => {
-          const pt = vec3().toVar();
-          pt.y = float(instanceIndex).div( usize );
-          const scale = vec3( 10 ).toVar();
-          const index = uint( instanceIndex.mul( usize ) ).toVar();               
-          const val = float(  ).toVar();
-          
-          Loop( { start: uint(0), end: usize, type: "uint", condition: "<"}, ( { i } ) => {
-            pt.x = float(i).div( usize );
-            val.assign( gradientNoise( pt.mul( scale ), 0 ) );
-            dataStorage.element( index ).assign( val );
-            index.addAssign( 1 );
-          });
-          
-        })().compute( size );
-        
-        await renderer.computeAsync( computeNoise );
-        
-        data = new Float32Array( await renderer.getArrayBufferAsync( dataStorage.value ) );
+          const val = gradientNoise( pt, 0 ) ;
 
-        const canvas = document.createElement('canvas');
+					textureStore( storageTexture, indexUV, vec4( val, val, val, val ) ).toWriteOnly();
 
-        canvas.width = size;
-        canvas.height = size;
+				} )( { storageTexture }).compute( size * size );
         
-        const ctx = canvas.getContext( '2d' );
+        await renderer.computeAsync( computeTexture );
         
-        let i = 0;
-        
-        for( let y=0; y<size; y++){
-          for( let x=0; x<size; x++){
-            const a = data[i++];
-            const d = ~~(a * 256);
-            ctx.fillStyle = `rgba(${d}, ${d}, ${d}, ${a})`;
-            ctx.fillRect( x, y, 1, 1 );
-          }
-        }
-        
-        const texture = new THREE.CanvasTexture( canvas );
-        
-        texture.format = THREE.RGBAFormat;
-        texture.minFilter = THREE.LinearFilter;
-        texture.magFilter = THREE.LinearFilter;
-        texture.unpackAlignment = 1;
-        texture.needsUpdate = true;
-        
-        return texture;
+        return storageTexture;
       }
 
       async function tsl(){
@@ -151,7 +115,8 @@
         const material = new THREE.MeshBasicNodeMaterial( { transparent: true } );
         mesh = new THREE.Mesh( geometry, material );
 
-        material.map = await createNoiseTexture();
+        const storageTexture = await createNoiseTexture();
+        material.colorNode = texture( storageTexture );
 
         scene.add( mesh );
 
