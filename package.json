@@ -1,0 +1,15 @@
+{
+  "name": "tsl-tutorial",
+  "version": "1.0.0",
+  "description": "Examples from my ThreeJS Shading Language (TSL) course",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Nik Lever",
+  "license": "ISC",
+  "dependencies": {
+    "@types/three": "^0.172.0",
+    "three": "^0.172.0"
+  }
+}

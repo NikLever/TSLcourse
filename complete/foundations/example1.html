@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>TSL Course - Foundations - Example 1</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<!--<link type="text/css" rel="stylesheet" href="main.css">-->
+        <style>
+            body{
+                margin: 0;
+                padding: 0;
+            }
+        </style>
+    </head>
+	<body>
+		<script type="importmap">
+			{
+				"imports": {
+					"three": "../../node_modules/three/build/three.webgpu.js",
+                    "three/tsl": "../../node_modules/three/build/three.webgpu.js",
+					"three/addons/": "../../node_modules/three/examples/jsm/"
+				}
+			}
+		</script>
+
+        <script type="module">
+            import * as THREE from 'three';
+			import { positionLocal, texture, vec2, vec3, uv } from 'three/tsl';
+			import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+			import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
+			
+			let container;
+
+			let camera, scene, renderer, options, material;
+			
+			init();
+
+			function init( font ) {
+
+				container = document.createElement( 'div' );
+				document.body.appendChild( container );
+
+				camera = new THREE.PerspectiveCamera( 40, window.innerWidth / window.innerHeight, 1, 2500 );
+				camera.position.set( 0.0, 1, 4 );
+
+				//
+
+				scene = new THREE.Scene();
+				scene.background = new THREE.Color( 0x444488 );
+
+				//
+
+				renderer = new THREE.WebGPURenderer( { antialias: true } );
+				renderer.setPixelRatio( window.devicePixelRatio );
+				renderer.setSize( window.innerWidth, window.innerHeight );
+				renderer.setAnimationLoop( render );
+				container.appendChild( renderer.domElement );
+
+				//
+
+				//content
+
+				const ambient = new THREE.HemisphereLight( 0xaaaaaa, 0x333333 );
+				const light = new THREE.DirectionalLight( 0xFFFFFF, 3 );
+				light.position.set( 3, 3, 1 );
+				scene.add( ambient );
+				scene.add( light );
+
+				const geometry = new THREE.SphereGeometry( );
+				const material = new THREE.MeshStandardNodeMaterial( { color: 0xFF0000 } );
+				
+				//const customUV = normalWorld.mul( 20 );
+
+				//material.normalNode = mx_noise_vec3( customUV );
+				material.colorNode = positionLocal;
+				
+				const mesh = new THREE.Mesh( geometry, material );
+				scene.add( mesh );
+
+				const controls = new OrbitControls( camera, renderer.domElement );
+
+				const tex = new THREE.TextureLoader().load( "../../assets/apple_512.jpg" );
+
+				options = {
+					mode: "positionLocal"
+				}
+
+				const gui = new GUI();
+				gui.add( options, 'mode', [ "positionLocal", "texture" ] )
+				       .onChange( value => {
+						switch( value ){
+							case "positionLocal":
+								material.colorNode = positionLocal;
+								break;
+							case "texture":
+								material.colorNode = texture( tex );
+								break;
+						}
+						material.needsUpdate = true;
+					   })
+
+				window.addEventListener( 'resize', onWindowResize );
+
+			}
+
+			function onWindowResize() {
+
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+
+				renderer.setSize( window.innerWidth, window.innerHeight );
+
+			}
+
+			//
+
+			function render() {
+
+				renderer.render( scene, camera );
+
+			}
+
+        </script>
+    </body>
+</html>

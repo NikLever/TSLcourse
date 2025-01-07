@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>TSL Course - Clouds - Step 2</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<!--<link type="text/css" rel="stylesheet" href="main.css">-->
+        <style>
+            body{
+                margin: 0;
+                padding: 0;
+            }
+
+            #courses{
+              font: bold 30px "Arial";
+              position: fixed;
+              left: 20px;
+              top: 20px;
+              color: #ffffff;
+              text-decoration: none;
+            }
+
+            a:link {
+              color: white;
+              text-decoration: none;
+            }
+
+            a:hover{
+              color: #dddd33;
+              text-decoration: underline;
+            }
+
+            a:visited {
+              color: white;
+              text-decoration: none;
+            }
+        </style>
+    </head>
+	<body>
+		<script type="importmap">
+      {
+        "imports": {
+          "three": "../../node_modules/three/build/three.webgpu.js",
+          "three/webgpu": "../../node_modules/three/build/three.webgpu.js",
+          "three/tsl": "../../node_modules/three/build/three.tsl.js",
+          "three/addons/": "../../node_modules/three/examples/jsm/"
+        }
+      }
+    </script>
+    
+    <div id="courses"><a href="https://niklever.com/courses" target="_blank">niklever.com/courses</a></div>
+    
+    <script type="module">
+      import * as THREE from 'three';
+      import { attributeArray, uint, float, vec2, vec3, vec4, instanceIndex, Loop, Fn, mx_noise_float, uniform, abs, mix } from 'three/tsl';
+      import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+      import { perlinFbm, worleyFbm, remap } from '../../common/TSL-Common.js';
+      import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
+            
+      let container;
+
+      let camera, scene, renderer, mesh;
+            
+      init();
+
+      function init() {
+
+        renderer = new THREE.WebGPURenderer( { antialias: true } );
+        renderer.setPixelRatio( window.devicePixelRatio );
+        renderer.setSize( window.innerWidth, window.innerHeight );
+        renderer.setAnimationLoop( render );
+        document.body.appendChild( renderer.domElement );
+
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color( 0x0561a0 );
+
+        camera = new THREE.PerspectiveCamera( 40, window.innerWidth / window.innerHeight, 1, 40 );
+        camera.position.set( 0, 0, 2 );
+
+        new OrbitControls( camera, renderer.domElement );
+        
+        tsl();
+        
+        window.addEventListener( 'resize', onWindowResize );
+      }
+
+      async function createNoiseTexture( size = 512 ){
+        
+        let data = new Float32Array( size * size * 4 );
+
+        const dataStorage = attributeArray( data, "vec4").label(
+          "dataStorage"
+        );
+        // The Pixel Buffer Object (PBO) is required to get the GPU computed data in the WebGL2 fallback.
+        dataStorage.setPBO(true);
+
+        const usize = uniform( uint( size ) );
+        
+        const computeNoise = Fn( () => {
+          const pt = vec3().toVar();
+          pt.y = float(instanceIndex).div( usize );
+          const scale = vec3( 1 ).toVar();
+          const index = uint( instanceIndex.mul( usize ) ).toVar();               
+          const col = vec4(  ).toVar();
+          const freq = float (4.).toVar();
+          
+          Loop( { start: uint(0), end: usize, type: "uint", condition: "<"}, ( { i } ) => {
+            pt.x = float(i).div( usize );
+            const pt1 = pt.mul(scale).toVar();
+            const pfbm = mix(1., perlinFbm(pt1, 4., 7), .5).toVar();
+            pfbm.assign( abs(pfbm.mul(2.).sub(1.) ) ); // billowy perlin noise
+        
+            col.g.assign(worleyFbm(pt1, freq));
+            col.b.assign(worleyFbm(pt1, freq.mul(2.)));
+            col.a.assign(worleyFbm(pt1, freq.mul(4.)));
+            col.r.assign(remap(pfbm, 0., 1., col.g, 1.)); // perlin-worley
+
+            dataStorage.element( index ).assign( col );
+
+            index.addAssign( 1 );
+          });
+          
+        })().compute( size );
+        
+        await renderer.computeAsync( computeNoise );
+        
+        data = new Float32Array( await renderer.getArrayBufferAsync( dataStorage.value ) );
+
+        const canvas = document.createElement('canvas');
+
+        canvas.width = size;
+        canvas.height = size;
+        
+        const ctx = canvas.getContext( '2d' );
+        
+        let i = 0;
+        
+        for( let y=0; y<size; y++){
+          for( let x=0; x<size; x++){
+            const r = ~~(data[i++] * 256);
+            const g = ~~(data[i++] * 256);
+            const b = ~~(data[i++] * 256);
+            const a = data[i++];
+            ctx.fillStyle = `rgba(${r}, ${r}, ${r}, ${a})`;
+            ctx.fillRect( x, y, 1, 1 );
+          }
+        }
+        
+        const texture = new THREE.CanvasTexture( canvas );
+        
+        texture.format = THREE.RGBAFormat;
+        texture.minFilter = THREE.LinearFilter;
+        texture.magFilter = THREE.LinearFilter;
+        texture.unpackAlignment = 1;
+        texture.needsUpdate = true;
+        
+        return texture;
+      }
+
+      async function tsl(){
+
+        const geometry = new THREE.PlaneGeometry( );
+        const material = new THREE.MeshBasicNodeMaterial( { transparent: true } );
+        mesh = new THREE.Mesh( geometry, material );
+
+        material.map = await createNoiseTexture();
+
+        scene.add( mesh );
+
+        window.addEventListener( 'resize', onWindowResize );
+
+      }
+
+      function onWindowResize() {
+
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+
+        renderer.setSize( window.innerWidth, window.innerHeight );
+      }
+
+      //
+
+      function render() {
+
+        renderer.render( scene, camera );
+
+      }   
+
+    </script>
+  </body>
+</html>

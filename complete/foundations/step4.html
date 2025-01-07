@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>TSL Course - Foundations - Step 4</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<!--<link type="text/css" rel="stylesheet" href="main.css">-->
+        <style>
+            body{
+                margin: 0;
+                padding: 0;
+            }
+        </style>
+    </head>
+	<body>
+		<script type="importmap">
+			{
+				"imports": {
+					"three": "../../node_modules/three/build/three.webgpu.js",
+                    "three/tsl": "../../node_modules/three/build/three.webgpu.js",
+					"three/addons/": "../../node_modules/three/examples/jsm/"
+				}
+			}
+		</script>
+		<div id="courses"><a href="https://niklever.com/courses" target="_blank">niklever.com/courses</a></div>
+        <script type="module">
+            import * as THREE from 'three';
+			import { positionLocal, normalLocal, Fn, time, sin, mix, vec2, vec3, fract, dot, 
+				screenCoordinate, texture, varying, float, uv, mx_noise_float, uniform } from "three/tsl";
+			import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+			import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
+			
+			let container;
+
+			let camera, scene, renderer, options, material;
+			
+			init();
+
+			let camera, scene, renderer, options, material, assetPath;
+
+init();
+
+function init() {
+  container = document.createElement("div");
+  document.body.appendChild(container);
+
+  camera = new THREE.PerspectiveCamera(
+    40,
+    window.innerWidth / window.innerHeight,
+    1,
+    200
+  );
+  camera.position.set(0.0, 0, 100);
+
+  //
+
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x444488);
+
+  //
+
+  renderer = new THREE.WebGPURenderer({ antialias: true });
+  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setAnimationLoop(render);
+  container.appendChild(renderer.domElement);
+
+  //
+
+  //content
+
+  const ambient = new THREE.HemisphereLight(0xaaaaaa, 0x333333);
+  const light = new THREE.DirectionalLight(0xffffff, 3);
+  light.position.set(3, 3, 1);
+  scene.add(ambient);
+  scene.add(light);
+
+  const controls = new OrbitControls(camera, renderer.domElement);
+
+  assetPath = "https://s3-us-west-2.amazonaws.com/s.cdpn.io/2666677/";
+
+  tsl();
+
+  window.addEventListener("resize", onWindowResize);
+}
+
+function tsl() {
+  const geometry = new THREE.IcosahedronGeometry(20, 4);
+  material = new THREE.MeshStandardNodeMaterial({
+    color: 0xff0000
+  });
+
+  const tex = new THREE.TextureLoader()
+    .setPath( assetPath )
+    .load("explosion.png");
+
+  const mesh = new THREE.Mesh(geometry, material);
+  scene.add(mesh);
+
+  options = {
+    strength: 0.213,
+    scale: 1.8,
+    speed: 1.9,
+    range: 0.5,
+    offset: 0.3
+  };
+
+  const noiseStrength = uniform(options.strength);
+  const noiseScale = uniform(options.scale);
+  const noiseSpeed = uniform(options.speed);
+  const uvRange = uniform(options.range);
+  const uvOffset = uniform(options.offset);
+
+  const vNoise = varying(float());
+  const vPosition = varying(vec3());
+
+  const posFunc = Fn(() => {
+    vNoise.assign(
+      mx_noise_float(positionLocal.add(time.mul(noiseSpeed)).mul(noiseScale))
+    );
+
+    vPosition.assign(positionLocal);
+
+    const pos = positionLocal.add(normalLocal.mul(vNoise)).toVar();
+
+    return mix(positionLocal, pos, noiseStrength);
+  });
+
+  const randFunc = /*#__PURE__*/ Fn(([pt_immutable, seed_immutable]) => {
+    const seed = float(seed_immutable).toVar();
+    const pt = vec3(pt_immutable).toVar();
+    const scale = vec3(12.9898, 78.233, 151.7182).toVar();
+
+    return fract(
+      sin(dot(pt.add(seed), scale))
+        .mul(43758.5453)
+        .add(seed)
+    );
+  }).setLayout({
+    name: "random",
+    type: "float",
+    inputs: [
+      { name: "pt", type: "vec3" },
+      { name: "seed", type: "float" }
+    ]
+  });
+
+  const fragFunc = Fn(() => {
+    const r = randFunc({ pt: vec3(screenCoordinate, 0).mul(0.01), seed: 0 });
+    const uv0 = vec2(0, vNoise.mul(1.3).add(r));
+    return texture(tex, uv0);
+  });
+
+  material.positionNode = posFunc();
+  material.fragmentNode = fragFunc();
+
+  const gui = new GUI();
+  gui.add(options, "strength", 0, 1).onChange((value) => {
+    noiseStrength.value = value;
+  });
+  gui.add(options, "scale", 1, 5).onChange((value) => {
+    noiseScale.value = value;
+  });
+  gui.add(options, "speed", 0.3, 5).onChange((value) => {
+    noiseSpeed.value = value;
+  });
+  gui.add(options, "range", 0, 1).onChange((value) => {
+    uvRange.value = value;
+  });
+  gui.add(options, "offset", -5, 5).onChange((value) => {
+    uvOffset.value = value;
+  });
+}
+
+			function onWindowResize() {
+
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+
+				renderer.setSize( window.innerWidth, window.innerHeight );
+
+			}
+
+			//
+
+			function render() {
+
+				renderer.render( scene, camera );
+
+			}
+
+        </script>
+    </body>
+</html>
