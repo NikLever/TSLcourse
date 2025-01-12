@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<!-- refactor of https://www.shadertoy.com/view/3dVXDc -->
+<html lang="en">
+	<head>
+		<title>TSL Course - Clouds - Step 6</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<!--<link type="text/css" rel="stylesheet" href="main.css">-->
+        <style>
+            body{
+                margin: 0;
+                padding: 0;
+            }
+
+            #courses{
+              font: bold 30px "Arial";
+              position: fixed;
+              left: 20px;
+              top: 20px;
+              color: #ffffff;
+              text-decoration: none;
+            }
+
+            #slice{
+              font: bold 30px "Arial";
+              position: fixed;
+              right: 20px;
+              top: 20px;
+              color: #ffffff;
+              text-decoration: none;
+            }
+
+            a:link {
+              color: white;
+              text-decoration: none;
+            }
+
+            a:hover{
+              color: #dddd33;
+              text-decoration: underline;
+            }
+
+            a:visited {
+              color: white;
+              text-decoration: none;
+            }
+        </style>
+    </head>
+	<body>
+		<script type="importmap">
+      {
+        "imports": {
+          "three": "../../node_modules/three/build/three.webgpu.js",
+          "three/webgpu": "../../node_modules/three/build/three.webgpu.js",
+          "three/tsl": "../../node_modules/three/build/three.tsl.js",
+          "three/addons/": "../../node_modules/three/examples/jsm/"
+        }
+      }
+    </script>
+    
+    <div id="courses"><a href="https://niklever.com/courses" target="_blank">niklever.com/courses</a></div>
+     
+    <script type="module">
+      import * as THREE from 'three';
+      import { uv, uvec2, float, uint, vec2, vec3, vec4, instanceIndex, Fn, abs, mix, texture, textureStore, time, floor, saturate, reciprocal, uniform, If, Loop, Break, positionWorld,
+      cameraPosition, exp, fract, select, ceil } from 'three/tsl';
+      import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+      import { perlinFbm, worleyFbm, remap, pointInAABB } from '../../common/TSL-Common.js';
+      import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
+            
+      let container;
+
+      let camera, scene, renderer, mesh;
+            
+      init();
+
+      function init() {
+
+        renderer = new THREE.WebGPURenderer( { antialias: true } );
+        renderer.setPixelRatio( window.devicePixelRatio );
+        renderer.setSize( window.innerWidth, window.innerHeight );
+        renderer.setAnimationLoop( render );
+        document.body.appendChild( renderer.domElement );
+
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color( 0x0561a0 );
+
+        camera = new THREE.PerspectiveCamera( 40, window.innerWidth / window.innerHeight, 0.1, 100 );
+        camera.position.set( 0, 0, 30 );
+
+        new OrbitControls( camera, renderer.domElement );
+        
+        tsl();
+        
+        window.addEventListener( 'resize', onWindowResize );
+      }
+
+      async function createNoiseTexture( size = 256, cellsX = 16, cellsY = 8 ){
+
+        const storageTexture = new THREE.StorageTexture( size * cellsX, size * cellsY );
+        storageTexture.wrapS = THREE.RepeatWrapping;
+        storageTexture.wrapT = THREE.RepeatWrapping;
+        storageTexture.minFilter = THREE.NearestFilter;
+        storageTexture.maxFilter = THREE.NearestFilter;
+        storageTexture.generateMinMaps = false;
+
+        const computeTexture = Fn( ( { storageTexture }) => {
+          const posX = instanceIndex.modInt( size * cellsX ).toVar();
+          const posY = instanceIndex.div( size * cellsX ).toVar();
+          const indexUV = uvec2( posX, posY );
+
+          const slices = cellsX * cellsY;
+          const row = uint( posY.div( size ) ).toVar();
+          const col = uint( posX.div( size ) ).toVar();
+          const slice = row.mul( cellsX ).add( col ).toVar();//uint(cellsX).sub(col) ).toVar();
+
+          const pt = vec3( posX.sub(col.mul(size)), posY.sub(row.mul(size)), 0).div( size );
+          pt.z = float(slice).div( slices );
+
+          const freq = float( 4. );
+
+          const pfbm = mix(1., perlinFbm( pt, 4., 7), .5).toVar();
+          pfbm.assign( abs(pfbm.mul(2.).sub(1.) ) ); // billowy perlin noise
+      
+          const g = worleyFbm(pt, freq);
+          const b = worleyFbm(pt, freq.mul(2.));
+          const a = worleyFbm(pt, freq.mul(4.));
+          const r = remap(pfbm, 0., 1., g, 1.); // perlin-worley
+
+          textureStore( storageTexture, indexUV, vec4( r, g, b, a ) ).toWriteOnly();
+        })( { storageTexture } ).compute( size * size * cellsY * cellsX );
+        
+        await renderer.computeAsync( computeTexture );
+        
+        return storageTexture;
+      }
+
+      async function tsl(){
+
+        const geometry = new THREE.BoxGeometry( 40, 20, 40 );
+        const material = new THREE.MeshBasicNodeMaterial( { transparent: true } );
+        mesh = new THREE.Mesh( geometry, material );
+        const bbox = new THREE.Box3();
+        mesh.geometry.computeBoundingBox();
+        bbox.copy( mesh.geometry.boundingBox ).applyMatrix4( mesh.matrixWorld );
+        const bbmin = uniform( vec3( bbox.min ) );
+        const bbmax = uniform( vec3( bbox.max ) );
+
+        const cellsX = 16;
+        const cellsY = 8;
+        const slices = cellsX * cellsY;
+
+        const storageTexture = await createNoiseTexture( 256, cellsX, cellsY );
+
+        const stepSize = uniform( float(0.5) );
+        const stepCount = uniform( uint(50) );
+        const cloudScale = uniform( float(1.) );
+        const intensity = uniform( float(1) );
+
+        const getDensityTSL = Fn( ( { storageTexture, pt, next } ) => {
+            const slices = cellsX * cellsY;
+            const slice = select( next, ceil(pt.z.mul(slices)), floor(pt.z.mul(slices))) ;
+            If( slice.greaterThanEqual( slices ), () => {
+                slice.subAssign(slices);
+            });
+
+            const col = slice.modInt( cellsX ).toVar();
+            const row = uint( slice.div( cellsX ) ).toVar();
+            const origin = vec2( float(col).div( cellsX ), float(row).div( cellsY ) );
+            
+            const uv1 = vec2( pt.xy ).div( vec2( cellsX, cellsY ) ).toVar();
+            uv1.addAssign( origin );
+            
+            const perlinWorley = texture( storageTexture, uv1, 0 ).x;
+    
+            // worley fbms with different frequencies
+            const worley = texture( storageTexture, uv1, 0 ).yzw.toVar();
+            const wfbm = worley.x.mul(.625).add( worley.y.mul(.125) ).add( worley.z.mul(.25) ).toVar(); 
+    
+            // cloud shape modeled after the GPU Pro 7 chapter
+            const cloud = remap(perlinWorley, wfbm.sub(1.), 1., 0., 1.).toVar();
+            cloud.assign(saturate(remap(cloud, .85, 1., 0., 1.))); // fake cloud coverage
+    
+            return cloud;
+        } );
+
+        const samplePositionToUV = Fn( ( { pos, bbmin, bbmax } ) => {
+            const uv = pos.sub( bbmin ).div(bbmax.sub(bbmin)).toVar();
+            uv.x.subAssign( time.mul( .02 ) );
+            uv.y.subAssign( time.mul( .02 ) );
+            uv.x = fract( uv.x );
+            uv.y = fract( uv.y );
+            return uv;
+        });
+
+        const raymarchTSL = /*@__PURE__*/ Fn( ( { storageTexture } ) => {
+            const rayDirection = positionWorld.sub( cameraPosition ).normalize().toVar();
+            const samplePosition = positionWorld.toVar();
+            const stepVec = rayDirection.mul( stepSize );
+            const slices = cellsX * cellsY;
+            
+            const density = float().toVar();
+            const count = uint(0).toVar();
+            const scaler = vec3( cloudScale, cloudScale, 1. ).toVar();
+            
+            Loop( { start: uint(0), end: stepCount, type: "uint", condition: "<" },
+            ({ i }) => {
+                If( ( pointInAABB( samplePosition, bbmin, bbmax ) ), () => {
+
+                    const pt = samplePositionToUV( { pos: samplePosition, bbmin, bbmax } ).mul( scaler );
+
+                    const s1 = getDensityTSL( { storageTexture, pt, next: false } );
+                    const s2 = getDensityTSL( { storageTexture, pt, next: true } );
+
+                    density.addAssign( mix( s1, s2, fract( pt.z.mul( slices ))) );
+                    count.addAssign( 1 );
+                });
+
+                samplePosition.addAssign( stepVec );
+            });
+            
+            density.assign( float(1.0).sub(exp(density.divAssign( count ).mul(intensity).mul(-1))));
+            
+            return vec4( 1, 1, 1, saturate(density.mul(intensity)));
+        });
+
+        material.fragmentNode = raymarchTSL( { storageTexture } );
+        //material.colorNode = texture( storageTexture );
+
+        scene.add( mesh );
+
+        window.addEventListener( 'resize', onWindowResize );
+
+        const gui = new GUI();
+        gui.add( stepSize, 'value', 0, 5).name('stepSize');
+        gui.add( stepCount, 'value', 1, 128).name('stepCount');
+        //gui.add( cloudScale, 'value', 0.5, 3).name('cloudScale');
+        //gui.add( intensity, 'value', 0, 1).name('intensity');
+      }
+
+      function onWindowResize() {
+
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+
+        renderer.setSize( window.innerWidth, window.innerHeight );
+      }
+
+      //
+
+      function render() {
+
+        renderer.render( scene, camera );
+
+      }   
+
+    </script>
+  </body>
+</html>

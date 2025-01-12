@@ -2,7 +2,7 @@
 <!-- refactor of https://www.shadertoy.com/view/3dVXDc -->
 <html lang="en">
 	<head>
-		<title>TSL Course - Clouds - Step 2</title>
+		<title>TSL Course - Clouds - Step 4</title>
 		<meta charset="utf-8">
 		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
 		<!--<link type="text/css" rel="stylesheet" href="main.css">-->
@@ -53,7 +53,7 @@
     
     <script type="module">
       import * as THREE from 'three';
-      import { uv, uvec2, float, vec2, vec3, vec4, instanceIndex, Fn, abs, mix, texture, textureStore, time, fract, saturate } from 'three/tsl';
+      import { uv, uvec2, float, uint, vec2, vec3, vec4, instanceIndex, Fn, abs, mix, texture, textureStore, time, fract, saturate } from 'three/tsl';
       import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
       import { perlinFbm, worleyFbm, remap } from '../../common/TSL-Common.js';
       import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
@@ -76,7 +76,7 @@
         scene.background = new THREE.Color( 0x0561a0 );
 
         camera = new THREE.PerspectiveCamera( 40, window.innerWidth / window.innerHeight, 1, 40 );
-        camera.position.set( 0, 0, 2 );
+        camera.position.set( 0, 0, 5 );
 
         new OrbitControls( camera, renderer.domElement );
         
@@ -85,9 +85,9 @@
         window.addEventListener( 'resize', onWindowResize );
       }
 
-      async function createNoiseTexture( size = 512 ){
+      async function createNoiseTexture( size = 256, cellsX = 16, cellsY = 8 ){
 
-        const storageTexture = new THREE.StorageTexture( size, size );
+        const storageTexture = new THREE.StorageTexture( size * cellsX, size * cellsY );
         storageTexture.wrapS = THREE.RepeatWrapping;
         storageTexture.wrapT = THREE.RepeatWrapping;
         storageTexture.minFilter = THREE.NearestFilter;
@@ -95,11 +95,18 @@
         storageTexture.generateMinMaps = false;
 
         const computeTexture = Fn( ( { storageTexture }) => {
-          const posX = instanceIndex.modInt( size );
-          const posY = instanceIndex.div( size );
+          const posX = instanceIndex.modInt( size * cellsX ).toVar();
+          const posY = instanceIndex.div( size * cellsX ).toVar();
           const indexUV = uvec2( posX, posY );
 
-          const pt = vec3( posX, posY, 0).div( size );
+          const slices = cellsX * cellsY;
+          const row = uint( posY.div( size ) ).toVar();
+          const col = uint( posX.div( size ) ).toVar();
+          const slice = row.mul( cellsX ).add( uint(cellsX).sub(col) ).toVar();
+
+          const pt = vec3( posX.sub(col.mul(size)), posY.sub(row.mul(size)), 0).div( size );
+          pt.z = float(slice).div( slices );
+
           const freq = float( 4. );
 
           const pfbm = mix(1., perlinFbm( pt, 4., 7), .5).toVar();
@@ -111,7 +118,8 @@
           const r = remap(pfbm, 0., 1., g, 1.); // perlin-worley
 
           textureStore( storageTexture, indexUV, vec4( r, g, b, a ) ).toWriteOnly();
-        })( { storageTexture } ).compute( size * size );
+          //textureStore( storageTexture, indexUV, vec4( pt.y, pt.y, pt.y, 1. ) ).toWriteOnly();
+        })( { storageTexture } ).compute( size * size * cellsY * cellsX );
         
         await renderer.computeAsync( computeTexture );
         
@@ -120,35 +128,13 @@
 
       async function tsl(){
 
-        const geometry = new THREE.PlaneGeometry( 3, 3 );
+        const geometry = new THREE.PlaneGeometry( 6, 3 );
         const material = new THREE.MeshBasicNodeMaterial( { transparent: true } );
         mesh = new THREE.Mesh( geometry, material );
 
         const storageTexture = await createNoiseTexture();
 
-        const fragmentTSL = Fn( ( { storageTexture } ) => {
-          const uv1 = vec2( uv() ).sub( time.mul( .02 ) );
-          uv1.x = fract( uv1.x );
-          uv1.y = fract( uv1.y );
-          
-          const col = vec3(0.);
-    
-          const perlinWorley = texture( storageTexture, uv1, 0 ).x;
-    
-          // worley fbms with different frequencies
-          const worley = texture( storageTexture, uv1, 0 ).yzw.toVar();
-          const wfbm = worley.x.mul(.625).add( worley.y.mul(.125) ).add( worley.z.mul(.25) ).toVar(); 
-    
-          // cloud shape modeled after the GPU Pro 7 chapter
-          const cloud = remap(perlinWorley, wfbm.sub(1.), 1., 0., 1.).toVar();
-          cloud.assign(saturate(remap(cloud, .85, 1., 0., 1.))); // fake cloud coverage
-
-          //const r = texture( storageTexture, uv1 );
-    
-          return vec4( cloud, cloud, cloud, cloud );
-        });
-
-        material.fragmentNode = fragmentTSL( { storageTexture } );
+        material.colorNode = texture( storageTexture );
 
         scene.add( mesh );
 
