@@ -2,7 +2,7 @@
 <!-- refactor of https://www.shadertoy.com/view/3dVXDc -->
 <html lang="en">
 	<head>
-		<title>TSL Course - Clouds - Step 6</title>
+		<title>TSL Course - Clouds - Step 7</title>
 		<meta charset="utf-8">
 		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
 		<!--<link type="text/css" rel="stylesheet" href="main.css">-->
@@ -63,7 +63,7 @@
     <script type="module">
       import * as THREE from 'three';
       import { uv, uvec2, float, uint, vec2, vec3, vec4, instanceIndex, Fn, abs, mix, texture, textureStore, time, floor, saturate, reciprocal, uniform, If, Loop, Break, positionWorld,
-      cameraPosition, exp, fract, select, ceil } from 'three/tsl';
+      cameraPosition, exp, fract, select, ceil, oneMinus } from 'three/tsl';
       import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
       import { perlinFbm, worleyFbm, remap, pointInAABB } from '../../common/TSL-Common.js';
       import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
@@ -155,7 +155,13 @@
         const stepSize = uniform( float(1) );
         const stepCount = uniform( uint(30) );
         const cloudScale = uniform( float(1.) );
-        const intensity = uniform( float(2.8) );
+        const intensity = uniform( float(1.8) );
+        const lightIntensity = uniform( float( 1.2 ) );
+        const lightAbsorb = uniform( float( .3 ) );
+        const darknessThreshold = uniform( float( 0.18 ) );
+        const transmittance = uniform( float( 1. ) );
+        const color = uniform( vec3( 1., 1., 1. ) );
+        const shadowColor = uniform( vec3( .2, .2, .4 ) );
 
         const getDensityTSL = Fn( ( { storageTexture, pt, next } ) => {
             const slices = cellsX * cellsY;
@@ -201,7 +207,15 @@
             
             const density = float().toVar();
             const count = uint(0).toVar();
+            const countb = uint(0).toVar();
             const scaler = vec3( cloudScale, cloudScale, 1. ).toVar();
+            const transmission = float(transmittance).toVar();
+            const finalLight = float().toVar();
+  
+            const lightSamplePosition = vec3().toVar();
+            const lightAccumulation = float().toVar();
+
+            const lightDir = vec3( 1, 10, 1 ).normalize().mul( stepSize ).toVar();
             const pt = vec3().toVar();
             const s1 = float().toVar();
             const s2 = float().toVar();
@@ -210,21 +224,47 @@
             ({ i }) => {
                 If( ( pointInAABB( samplePosition, bbmin, bbmax ) ), () => {
 
-                  pt.assign( samplePositionToUV( { pos: samplePosition, bbmin, bbmax } ).mul( scaler ) );
+                    pt.assign( samplePositionToUV( { pos: samplePosition, bbmin, bbmax } ).mul( scaler ) );
 
-                  s1.assign( getDensityTSL( { storageTexture, pt, next: false } ) );
-                  s2.assign( getDensityTSL( { storageTexture, pt, next: true } ) );
+                    s1.assign( getDensityTSL( { storageTexture, pt, next: false } ) );
+                    s2.assign( getDensityTSL( { storageTexture, pt, next: true } ) );
 
                     density.addAssign( mix( s1, s2, fract( pt.z.mul( slices ))) );
                     count.addAssign( 1 );
+
+                    lightSamplePosition.assign( samplePosition );
+
+                    Loop( { start: uint(0), end: uint(8), type: "uint", condition: "<"},
+                    ({ i }) => {
+                        lightSamplePosition.addAssign( lightDir );
+                        If( ( pointInAABB( lightSamplePosition, bbmin, bbmax ) ), () => {
+                            pt.assign(samplePositionToUV( { pos: lightSamplePosition, bbmin, bbmax } ).mul( scaler ) );
+                            lightAccumulation.addAssign( getDensityTSL( { storageTexture, pt, next: false } ) );
+                            countb.addAssign( 1 );
+                        });
+                    });
                 });
 
                 samplePosition.addAssign( stepVec );
             });
             
-            density.assign( float(1.0).sub(exp(density.divAssign( count ).mul(-1))));
+            /*density.divAssign( count );
+            lightAccumulation.divAssign( countb );
+
+            transmission.assign(exp(oneMinus(density.mul(-1.))));
+
+            const lightTransmission = exp(lightAccumulation.mul(-1.));
+            const shadow = darknessThreshold.add(lightTransmission.mul( oneMinus(darknessThreshold) ) );
+            finalLight.addAssign( density.mul(transmission).mul(shadow) );
+            transmission.mulAssign( exp(density.mul(lightAbsorb).mul(-1.)) );*/
+
+            density.assign( oneMinus(exp(density.divAssign( count ).mul(intensity).mul(-1))));
+            lightAccumulation.assign( oneMinus(exp(lightAccumulation.divAssign( countb ).mul(lightIntensity).mul(-1))));
             
-            return vec4( 1, 1, 1, saturate(density.mul(intensity)));
+
+            const col = mix(color, shadowColor, saturate( lightAccumulation ) );
+            
+            return saturate( vec4( col.rgb, density  ) );//(density.mul(intensity)));
         });
 
         material.fragmentNode = raymarchTSL( { storageTexture } );
@@ -236,7 +276,14 @@
         const gui = new GUI();
         gui.add( stepSize, 'value', 0, 5).name('stepSize');
         gui.add( stepCount, 'value', 1, 128).name('stepCount');
-        gui.add( intensity, 'value', 0, 3).name('intensity');
+        gui.add( intensity, 'value', 0, 2).name('intensity');
+        gui.add( lightIntensity, 'value', 0, 2).name('lightIntensity');
+        const options = {
+            color: 0xFFFFFF,
+            shadowColor: 0x223344
+        }
+        gui.addColor( options, 'color');
+        gui.addColor( options, 'shadowColor');
       }
 
       function onWindowResize() {
