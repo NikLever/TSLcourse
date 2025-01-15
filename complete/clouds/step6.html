@@ -70,7 +70,7 @@
             
       let container;
 
-      let camera, scene, renderer, mesh;
+      let camera, scene, renderer, mesh, clock, controls;
             
       init();
 
@@ -88,7 +88,10 @@
         camera = new THREE.PerspectiveCamera( 40, window.innerWidth / window.innerHeight, 0.1, 100 );
         camera.position.set( 0, 0, 30 );
 
-        new OrbitControls( camera, renderer.domElement );
+        controls = new OrbitControls( camera, renderer.domElement );
+        controls.autoRotate = true;
+
+        clock = new THREE.Clock();
         
         tsl();
         
@@ -250,6 +253,8 @@
       //
 
       function render() {
+
+        controls.update( clock.getDelta() );
 
         renderer.render( scene, camera );
 

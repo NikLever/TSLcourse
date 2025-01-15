@@ -52,7 +52,8 @@
     
     <script type="module">
       import * as THREE from 'three';
-      import { uvec2, float, vec3, vec4, instanceIndex, Fn, abs, mix, texture, textureStore } from 'three/tsl';
+      import { uvec2, float, uint, vec3, vec4, instanceIndex, Fn, abs, mix, texture, textureStore,
+        uniform, If, equals } from 'three/tsl';
       import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
       import { perlinFbm, worleyFbm, remap } from '../../common/TSL-Common.js';
       import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
@@ -88,7 +89,7 @@
 
         const storageTexture = new THREE.StorageTexture( size, size );
 
-        const computeTexture = Fn( ( { storageTexture }) => {
+        const computeTexture = Fn( ( { texture }) => {
           const posX = instanceIndex.modInt( size );
           const posY = instanceIndex.div( size );
           const indexUV = uvec2( posX, posY );
@@ -104,8 +105,8 @@
           const a = worleyFbm(pt, freq.mul(4.));
           const r = remap(pfbm, 0., 1., g, 1.); // perlin-worley
 
-          textureStore( storageTexture, indexUV, vec4( r, g, b, a ) ).toWriteOnly();
-        })( { storageTexture } ).compute( size * size );
+          textureStore( texture, indexUV, vec4( r, g, b, a ) ).toWriteOnly();
+        })( { texture: storageTexture } ).compute( size * size );
         
         await renderer.computeAsync( computeTexture );
         
@@ -119,12 +120,35 @@
         mesh = new THREE.Mesh( geometry, material );
 
         const storageTexture = await createNoiseTexture();
-        material.colorNode = texture( storageTexture );
+
+        const channel = uniform( uint(4) );
+
+        const colorTSL = Fn( ( { storageTexture } ) => {
+          const texel = texture( storageTexture );
+          const result = vec4().toVar();
+
+          If( ( channel.lessThan( uint( 1 ) ) ), () => { result.assign( vec4( texel.r ) ) } )
+          .ElseIf( ( channel.lessThan( uint(2) ) ), () => { result.assign( vec4( texel.g ) ) } )
+          .ElseIf( ( channel.lessThan( uint(3) ) ), () => { result.assign( vec4( texel.b ) ) })
+          .ElseIf( ( channel.lessThan( uint(4) ) ), () => { result.assign( vec4( texel.a ) ) })
+          .Else(  () => { result.assign( texel ) });
+
+          return result;
+        });
+
+        material.colorNode = colorTSL( { storageTexture } );
 
         scene.add( mesh );
 
-        window.addEventListener( 'resize', onWindowResize );
+        const options = {
+          channel: 'all'
+        }
+        const gui = new GUI();
+        const channels = ['red', 'green', 'blue', 'alpha', 'all' ];
 
+        gui.add( options, 'channel', channels).onChange( ( value ) => { 
+          channel.value = channels.indexOf( value );
+        })
       }
 
       function onWindowResize() {

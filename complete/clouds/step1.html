@@ -100,7 +100,7 @@
 
           const val = gradientNoise( pt, 0 ) ;
 
-					textureStore( storageTexture, indexUV, vec4( val, val, val, val ) ).toWriteOnly();
+					textureStore( storageTexture, indexUV, vec4( 1, 1, 1, val ) ).toWriteOnly();
 
 				} )( { storageTexture }).compute( size * size );
         
