@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>TSL Course - Physics - Step 1</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<!--<link type="text/css" rel="stylesheet" href="main.css">-->
+        <style>
+            body{
+                margin: 0;
+                padding: 0;
+            }
+
+            #courses{
+              font: bold 30px "Arial";
+              position: fixed;
+              left: 20px;
+              top: 20px;
+              color: #ffffff;
+              text-decoration: none;
+            }
+
+            a:link {
+              color: white;
+              text-decoration: none;
+            }
+
+            a:hover{
+              color: #dddd33;
+              text-decoration: underline;
+            }
+
+            a:visited {
+              color: white;
+              text-decoration: none;
+            }
+        </style>
+    </head>
+	<body>
+		<script type="importmap">
+      {
+        "imports": {
+          "three": "../../node_modules/three/build/three.webgpu.js",
+          "three/webgpu": "../../node_modules/three/build/three.webgpu.js",
+          "three/tsl": "../../node_modules/three/build/three.tsl.js",
+          "three/addons/": "../../node_modules/three/examples/jsm/"
+        }
+      }
+    </script>
+    
+    <div id="courses"><a href="https://niklever.com/courses" target="_blank">niklever.com/courses</a></div>
+    
+    <script type="module">
+      import * as THREE from 'three';
+      import { instancedArray, Fn, instanceIndex, positionLocal, vec3, vec4, uniform, If, clamp,
+        Loop, length, Continue, dot, float, uint 
+       } from 'three/tsl';
+      import { BoxLineGeometry } from 'three/addons/geometries/BoxLineGeometry.js';
+      import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+      import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
+            
+      let container, camera, scene, renderer, computePosition, clock, deltatime, radius = 0.12;
+
+      const BALLS = 100;
+      const BOUNDS = 5;
+      const BOUNDS_HALF = BOUNDS/2;
+            
+      init();
+
+      function init() {
+
+        renderer = new THREE.WebGPURenderer( { antialias: true } );
+        renderer.setPixelRatio( window.devicePixelRatio );
+        renderer.setSize( window.innerWidth, window.innerHeight );
+        renderer.setAnimationLoop( render );
+        renderer.shadowMap.enabled = true;
+        document.body.appendChild( renderer.domElement );
+
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color( 0x0561a0 );
+
+        const ambient = new THREE.HemisphereLight(0xaaaaaa, 0x333333);
+        const light = new THREE.DirectionalLight(0xffffff, 3);
+        light.position.set(3, 3, 1);
+        light.castShadow = true;
+        light.shadow.mapSize.set( 2048, 2048 );
+				light.shadow.camera.near = 0.1;
+				light.shadow.camera.far = 30;
+				light.shadow.camera.top = 8;
+				light.shadow.camera.right = 8;
+				light.shadow.camera.bottom = - 8;
+				light.shadow.camera.left = - 8;
+				light.shadow.normalBias = 0.05;
+
+        scene.add(ambient);
+        scene.add(light);
+
+        camera = new THREE.PerspectiveCamera( 40, window.innerWidth / window.innerHeight, 0.1, 40 );
+        camera.position.set( 0, 1.6, 5 );
+
+        const material = new THREE.MeshBasicMaterial( { 
+          side: THREE.BackSide,
+          depthWrite: true
+         } );
+        material.map = new THREE.TextureLoader().load( '../../assets/grid.jpg', (texture) => {
+          texture.wrapS = THREE.RepeatWrapping;
+          texture.wrapT = THREE.RepeatWrapping;
+          texture.repeat.set( 10, 10 );
+        });
+
+        const room = new THREE.Mesh(
+					new THREE.BoxGeometry( 6, 6, 6 ),
+					material
+				);
+				room.geometry.translate( 0, 3, 0 );
+        room.receiveShadow = true;
+				scene.add( room );
+
+        clock = new THREE.Clock();
+
+        const controls = new OrbitControls( camera, renderer.domElement );
+        controls.maxDistance = 10;
+				controls.target.y = 1.6;
+				controls.update();
+        
+        tsl();
+        
+        window.addEventListener( 'resize', onWindowResize );
+      }
+
+      function initStorage() {
+        const positionArray = new Float32Array(BALLS * 3);
+        const velocityArray = new Float32Array(BALLS * 3);
+        
+        const q = new THREE.Quaternion();
+        const v = new THREE.Euler();
+
+        for (let i = 0; i < BALLS; i++) {
+          let offset = i * 3;
+
+          positionArray[offset + 0] = Math.random() * BOUNDS - BOUNDS_HALF;
+          positionArray[offset + 1] = BOUNDS_HALF + Math.random();
+          positionArray[offset + 2] = Math.random() * BOUNDS - BOUNDS_HALF;
+
+          q.random();
+          v.setFromQuaternion(q);
+
+          const scale = 0;
+
+          velocityArray[offset + 0] = v.x * scale;
+          velocityArray[offset + 1] = v.y * scale;
+          velocityArray[offset + 2] = v.z * scale;
+          
+        }
+
+        const positionStorage = instancedArray(positionArray, "vec3").label(
+          "positionStorage"
+        );
+        const velocityStorage = instancedArray(velocityArray, "vec3").label(
+          "velocityStorage"
+        );
+        
+        // The Pixel Buffer Object (PBO) is required to get the GPU computed data in the WebGL2 fallback.
+        positionStorage.setPBO(true);
+        velocityStorage.setPBO(true);
+
+        return [ positionStorage, velocityStorage ];
+      }
+
+      async function tsl(){
+
+        const geometry = new THREE.SphereGeometry( radius );
+        const material = new THREE.MeshStandardNodeMaterial({
+						color: 0xeeeeee,
+						roughness: .9,
+						metalness: 0
+				} );
+        const balls = new THREE.Mesh( geometry, material );
+        balls.castShadow = true;
+        //Cause mesh to act like an InstancedMesh
+        balls.count = BALLS;
+
+        const [ positionStorage, velocityStorage ] = await initStorage();
+
+        //Update each vertex 
+        material.positionNode = positionLocal.add( positionStorage.toAttribute() );
+       
+        deltatime = uniform();
+        const LIMITS = uniform( vec3(3, radius, 3 ) );
+      
+        computePosition = Fn( () => {
+          const pos = positionStorage.element( instanceIndex ).toVar();
+          const vel = velocityStorage.element( instanceIndex ).toVar();
+          
+          vel.xz.mulAssign( 0.98 );
+          vel.y.subAssign( deltatime.mul( 9.8 ) );
+
+          pos.addAssign( vel.mul( deltatime ) );
+
+          // keep objects inside room
+          If ( pos.x.lessThan(LIMITS.x.negate()).or( pos.x.greaterThan(LIMITS.x) ), () => {
+              pos.x.assign( clamp( pos.x, LIMITS.x.negate(), LIMITS.x ) );
+              vel.x.assign( vel.x.negate() );
+          } );
+
+          If ( pos.z.lessThan( LIMITS.z.negate() ).or( pos.z.greaterThan( LIMITS.z ) ), () => {
+              pos.z.assign( clamp( pos.z, LIMITS.z.negate(), LIMITS.z ) );
+              vel.z.assign( vel.z.negate() );
+          });
+
+          If ( pos.y.lessThan( LIMITS.y ), () => {
+              pos.y.assign( LIMITS.y );
+              vel.xz.mulAssign( 0.96 );
+              vel.y.assign( vel.y.negate().mul( 0.8 ) );
+          } );
+
+          const normal = vec3().toVar();
+          const relativeVelocity = vec3().toVar();
+          const distance = float().toVar();
+ 
+          Loop( { start: uint(0), end: uint( BALLS ),  type: "uint", condition: "<" }, ( { i } ) => {
+ 
+            If ( i.equal( instanceIndex ), () => {
+              Continue();
+            });
+
+            const pos2 = positionStorage.element( i ).toVar();
+            const vel2 = velocityStorage.element( i ).toVar();
+ 
+            normal.assign( pos.sub( pos2 ) );
+           
+  	        distance.assign( length(normal) );
+ 
+  	        If ( distance.lessThan( radius * 2 ), () => {
+ 
+        	    normal.mulAssign( distance.mul(0.5).sub( radius ) );
+ 
+        	    pos.subAssign( normal );
+ 
+        	    relativeVelocity.assign( vel.sub( vel2 ) );
+ 
+        	    normal.assign ( normal.normalize() );
+ 
+        	    normal.mulAssign( dot( relativeVelocity, normal ) );
+ 
+        	    vel.subAssign( normal );
+           
+  	        });
+
+          });
+
+          positionStorage.element(instanceIndex).assign( pos );
+          velocityStorage.element(instanceIndex).assign( vel );
+
+        })().compute(BALLS);
+
+        scene.add( balls );
+      }
+
+      function onWindowResize() {
+
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+
+        renderer.setSize( window.innerWidth, window.innerHeight );
+      }
+
+      //
+
+      function render() {
+        deltatime.value = clock.getDelta();
+
+        renderer.compute( computePosition );
+
+        renderer.render( scene, camera );
+
+      }   
+
+    </script>
+  </body>
+</html>
